@@ -158,7 +158,7 @@ void update_motcon(motiontype *p, odotype *q, sensetype *s);
 int fwd(double dist, double speed,int time,int condition);
 int turn(double angle, double speed,int time);
 int follow_line(double speed, char dir, int flag_c, int time, int condition,int followdist);
-int goto_box(double speed, int time);
+int goto_box(double speed);
 void speed_control(int aim, motiontype *p, odotype *q, sensetype *s);
 void speed_control_t(int aim, motiontype *p, odotype *q, sensetype *s);
 
@@ -395,6 +395,11 @@ i_2++;
        if (follow_line(speed_go, 'c', 1, mission.time, sens.w_cross,follow_dist)) 
 	mission.state = ms_end;
      break;
+	 
+	 case ms_goto_box:
+		 if (goto_box(speed_go))
+			 mission.state = ms_end;
+	 break;
 
      case ms_turn:
        if (turn(angle,speed_go,mission.time)){
@@ -671,7 +676,7 @@ int follow_line(double speed, char dir, int flag_c, int time, int condition,int 
 
 }
 
-int goto_box(double speed, int time) {
+int goto_box(double speed) {
 	switch (mission.sub_state)
 	{
 	case 0:
