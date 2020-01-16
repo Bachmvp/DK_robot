@@ -157,7 +157,7 @@ void update_motcon(motiontype *p, odotype *q, sensetype *s);
 
 int fwd(double dist, double speed,int time,int condition);
 int turn(double angle, double speed,int time);
-int follow_line(double speed, char dir, int flag_c, int time, int condition);
+int follow_line(double speed, char dir, int flag_c, int time, int condition,int followdist);
 int goto_box(double speed, int time);
 void speed_control(int aim, motiontype *p, odotype *q, sensetype *s);
 void speed_control_t(int aim, motiontype *p, odotype *q, sensetype *s);
@@ -202,7 +202,7 @@ static double record_line[9][ARRAY_LENTGH]={0};
 int main()
 {
   int running,n=0,arg,time=0,speed_go=0;
-  double dist=0,angle=0;
+  double dist=0,angle=0,follow_dist = 0;
   cross_counter = 0;
   w_cross_counter=0;
   sens.cross = 0;
@@ -376,9 +376,10 @@ i_2++;
    
    switch (mission.state) {
      case ms_init:
-       n=4; dist=1;angle=90.0/180*M_PI;
+       n=4; dist=1;angle=90.0;
        mission.state= ms_follow_white_line;
        speed_go = 20;
+	   follow_dist = 2;
      break;
   
      case ms_fwd:
@@ -386,12 +387,12 @@ i_2++;
      break;
      
      case ms_follow_line:
-       if (follow_line(speed_go, 'l', 0, mission.time, sens.cross)) 
+       if (follow_line(speed_go, 'l', 0, mission.time, sens.cross,follow_dist)) 
 	mission.state = ms_end;
      break;
 	 
      case ms_follow_white_line:
-       if (follow_line(speed_go, 'c', 1, mission.time, sens.w_cross)) 
+       if (follow_line(speed_go, 'c', 1, mission.time, sens.w_cross,follow_dist)) 
 	mission.state = ms_end;
      break;
 
@@ -610,21 +611,21 @@ int turn(double angle, double speed,int time){
    if (time==0){ 
      mot.cmd=mot_turn;
      mot.speed_t_aim=speed;
-     mot.angle=angle;
+     mot.angle= angle*(M_PI/180);
      return 0;
    }
    else
      return mot.finished;
 }
 
-int follow_line(double speed, char dir, int flag_c, int time, int condition) {
+int follow_line(double speed, char dir, int flag_c, int time, int condition,int followdist) {
 	int i = 0;
 	int min = 0;
 	int flag = 1;
 	if (time == 0) {
 		mot.cmd = mot_move;
 		mot.speed_aim = speed;
-		mot.dist = 1.6;
+		mot.dist = followdist;
 		return 0;
 	}
 	else {
@@ -671,22 +672,22 @@ int follow_line(double speed, char dir, int flag_c, int time, int condition) {
 }
 
 int goto_box(double speed, int time) {
-	switch (mission.sub_m_flag)
+	switch (mission.sub_state)
 	{
 	case 0:
-		if (follow_line(speed, 'c', 0, mission.sub_time, sens.cross)) {
-			mission.sub_m_flag = 1;
+		if (follow_line(speed, 'l', 0, mission.sub_time, 0, follow_dist)) {
+			mission.sub_state = 1;
 			mission.sub_time = (-1);
 		}
 		break;
 	case 1:
 		if (fwd(robot_length, speed, mission.sub_time, 0)) {
-			mission.sub_m_flag = 2;
+			mission.sub_state = 2;
 			mission.sub_time = (-1);
 		}
 		break;
 	case 2:
-		if (turn(-90, speed, mission.sub_time)) {
+		if (turn(90, speed, mission.sub_time)) {
 			return 1;
 		}
 		break;
