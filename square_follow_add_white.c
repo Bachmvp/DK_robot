@@ -304,7 +304,7 @@ int main()
         if (lmssrv.connected) {
             xmllaser = xml_in_init(4096, 32);
             printf(" laserserver xml initialized \n");
-            len=sprintf(buf,”scanpush cmd='zoneobst'\n”);
+            len=sprintf(buf,"scanpush cmd='zoneobst'\n");
             send(lmssrv.sockfd, buf, len, 0);
         }
 
