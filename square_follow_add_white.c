@@ -130,6 +130,8 @@ typedef struct{//input
 		int speed_t;//[currenty spped[-128,127]
 		int speed_t_aim;//target speed[-128,127]
 
+		//collision
+		int flag_collision;
 		
 		double dist;
 		double angle;
@@ -156,13 +158,16 @@ void update_motcon(motiontype *p, odotype *q, sensetype *s);
 int fwd(double dist, double speed,int time,int condition);
 int turn(double angle, double speed,int time);
 int follow_line(double speed, char dir, int flag_c, int time, int condition);
+int goto_box(double speed, int time);
 void speed_control(int aim, motiontype *p, odotype *q, sensetype *s);
 void speed_control_t(int aim, motiontype *p, odotype *q, sensetype *s);
 
 
 typedef struct{
-                int state,oldstate;
+        int state,oldstate;
 		int time;
+		int sub_time;
+		int sub_state;
 	       }smtype;
 
 void sm_update(smtype *p);
@@ -177,7 +182,7 @@ smtype mission;
 motiontype mot;
 sensetype sens;
 
-enum {ms_init,ms_fwd,ms_follow_line,ms_follow_white_line,ms_turn,ms_end};
+enum {ms_init,ms_fwd,ms_follow_line,ms_follow_white_line,ms_turn,ms_end,ms_goto_box};
 
 const double BLACK_THRESHOLD = 0.12;
 const double WHITE_THRESHOLD = 0.75;
@@ -201,6 +206,7 @@ int main()
   cross_counter = 0;
   w_cross_counter=0;
   sens.cross = 0;
+  sens.w_cross = 0;
   //open file//
   FILE* fp;
   FILE* fp2;
@@ -317,9 +323,11 @@ int main()
   mot.speed_t_aim = 0;
   mot.speed = 0;
   mot.speed_t = 0;
+  mot.flag_collision = 1;
   running=1; 
   mission.state=ms_init;
   mission.oldstate=-1;
+  mission.sub_state = 0;
   sens.black_line_follow = 1;
 while (running){ 
    if (lmssrv.config && lmssrv.status && lmssrv.connected){
@@ -661,13 +669,42 @@ int follow_line(double speed, char dir, int flag_c, int time, int condition) {
 	return mot.finished;
 
 }
+
+int goto_box(double speed, int time) {
+	switch (mission.sub_m_flag)
+	{
+	case 0:
+		if (follow_line(speed, 'c', 0, mission.sub_time, sens.cross)) {
+			mission.sub_m_flag = 1;
+			mission.sub_time = (-1);
+		}
+		break;
+	case 1:
+		if (fwd(robot_length, speed, mission.sub_time, 0)) {
+			mission.sub_m_flag = 2;
+			mission.sub_time = (-1);
+		}
+		break;
+	case 2:
+		if (turn(-90, speed, mission.sub_time)) {
+			return 1;
+		}
+		break;
+	}
+	return 0;
+}
+
+
 void sm_update(smtype *p){
   if (p->state!=p->oldstate){
-       p->time=0;
+	   p->sub_state = 0;
+	   p->time=0;
+	   p->sub_time = 0;
        p->oldstate=p->state;
    }
    else {
      p->time++;
+	 p->sub_time++;
    }
 }
 
@@ -678,6 +715,8 @@ void speed_control(int aim, motiontype *p, odotype *q, sensetype *s)
 			p->speed--;}
 	else if (p->speed < aim) {
 			p->speed++;}
+	if (s->ir_min < 0.20 && p->flag_collision)
+		p->speed = 0;
 	p->speedcmd = p->speed / 127.0;
 }
 
@@ -699,8 +738,14 @@ void update_sensors(sensetype *s, odotype *q)
 	int min_line_sensor = 3;
 	int max_line_sensor = 3;
 	int fork_counter = 0;
-        int line_counter=0;
-        int white_line_counter=0;
+	int line_counter = 0;
+	int white_line_counter = 0;
+
+	double Ka[5] = { 13.26, 18.12, 17.39, 15.00, 13.59 };
+	double Kb[5] = { 82.15, 87.46, 83.09, 77.13, 61.65 };
+
+	s->ir_min = 4;
+
 	/**** Line sensors ****/
 	for (i = 0; i < LINE_SENS_LENGTH; i++)
 	{
@@ -716,28 +761,29 @@ void update_sensors(sensetype *s, odotype *q)
 		if (s->linesensor[i] < BLACK_THRESHOLD) {
 			line_counter++;
 			if (fork_counter == 0 || fork_counter == 2)
-			    fork_counter++;
+				fork_counter++;
 		}
 		else {
 			if (fork_counter == 1)
 				fork_counter++;
-                        if(s->linesensor[i]>WHITE_THRESHOLD){
-                           white_line_counter++;}
+			if (s->linesensor[i] > WHITE_THRESHOLD) {
+				white_line_counter++;
 			}
+		}
 	}
 
 	if (line_counter == 8 && !s->cross) {
 		cross_counter++;
 		s->cross = 1;
 	}
-        if (white_line_counter == 8 && !s->cross) {
+	if (white_line_counter == 8 && !s->cross) {
 		w_cross_counter++;
 		s->w_cross = 1;
 	}
 	if (line_counter < 8) {
 		s->cross = 0;
 	}
-        if (white_line_counter < 8) {
+	if (white_line_counter < 8) {
 		s->w_cross = 0;
 	}
 	if (fork_counter == 3)
@@ -760,6 +806,25 @@ void update_sensors(sensetype *s, odotype *q)
 	}
 	s->min_line_sensor = min_line_sensor;
 	s->max_line_sensor = max_line_sensor;
+
+
+	/**** IR sensors ****/
+	for (i = 1; i < IR_SENS_LENGTH - 2; i++)
+	{
+		//Read in from sensor
+		s->irsensor[i] = irsensor->data[i];
+
+		s->ir_dist[i] = Ka[i] / (s->irsensor[i] - Kb[i]);
+
+		//printf("%f \t", s->ir_dist[i]);
+
+		if (i > 0 && i < IR_SENS_LENGTH - 2 && s->ir_dist[i]<s->ir_min && s->ir_dist[i]>0.05) {
+			s->ir_min = s->ir_dist[i];
+			//printf("Drove: %f m\n",q->x);
+		}
+
+	}
+
 }
 
 
