@@ -64,6 +64,7 @@ componentservertype lmssrv,camsrv;
 #define DELTA_M (M_PI * WHEEL_DIAMETER / 2000)
 #define ROBOTPORT	24902 //24902
 #define LINE_SENS_LENGTH 8
+#define IR_SENS_LENGTH 6
 
 typedef struct{ //input signals
 		int left_enc,right_enc; // encoderticks
@@ -96,12 +97,11 @@ typedef struct {
         int w_cross;//true or false
 	int fork; //true or false
 	int fork_test;
-	/*
-	double prev_ir_r, prev_ir_l;
+	
 	double ir_min;
 	double irsensor[IR_SENS_LENGTH];
 	double ir_dist[IR_SENS_LENGTH];
-
+	/*
 	double laser[10];
 	int min_las;
 	int min_las_2;
@@ -142,7 +142,7 @@ typedef struct{//input
 		double motorspeed_l,motorspeed_r; 
 		int finished;
 		// internal variables
-		double startpos;
+		double startpos;//unused
 		double start_deg;
 		double start_x;
 		double start_y;
