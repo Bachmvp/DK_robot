@@ -62,7 +62,7 @@ componentservertype lmssrv,camsrv;
 #define WHEEL_SEPARATION 0.26	/* m */
 #define E_d 1
 #define DELTA_M (M_PI * WHEEL_DIAMETER / 2000)
-#define ROBOTPORT	24902 //24902
+#define ROBOTPORT	8000 //24902
 #define LINE_SENS_LENGTH 8
 #define IR_SENS_LENGTH 6
 
@@ -159,6 +159,7 @@ int fwd(double dist, double speed,int time,int condition);
 int turn(double angle, double speed,int time);
 int follow_line(double speed, char dir, int flag_c, int time, int condition,int followdist);
 int goto_box(double speed,double followdist);
+int wait(double wait_time,int time);
 void speed_control(int aim, motiontype *p, odotype *q, sensetype *s);
 void speed_control_t(int aim, motiontype *p, odotype *q, sensetype *s);
 
@@ -182,7 +183,7 @@ smtype mission;
 motiontype mot;
 sensetype sens;
 
-enum {ms_init,ms_fwd,ms_follow_line,ms_follow_white_line,ms_turn,ms_end,ms_goto_box};
+enum {ms_init,ms_fwd,ms_follow_line,ms_follow_white_line,ms_turn,ms_end,ms_goto_box,ms_measBox,ms_wait};
 
 const double BLACK_THRESHOLD = 0.12;
 const double WHITE_THRESHOLD = 0.75;
@@ -203,6 +204,7 @@ int main()
 {
   int running,n=0,arg,time=0,speed_go=0;
   double dist=0,angle=0,follow_dist = 0;
+  double boxdist = 0;
   cross_counter = 0;
   w_cross_counter=0;
   sens.cross = 0;
@@ -377,9 +379,9 @@ i_2++;
    switch (mission.state) {
      case ms_init:
        n=4; dist=1;angle=90.0;
-       mission.state= ms_follow_white_line;
-       speed_go = 20;
-	   follow_dist = 2;
+       mission.state= ms_measBox;
+       speed_go = 40;
+	   follow_dist = 5;
      break;
   
      case ms_fwd:
@@ -395,10 +397,23 @@ i_2++;
        if (follow_line(speed_go, 'c', 1, mission.time, sens.w_cross,follow_dist)) 
 	mission.state = ms_end;
      break;
-	 
-	 case ms_goto_box:
-		 if (goto_box(speed_go,follow_dist))
-			 mission.state = ms_end;
+     
+     case ms_measBox:
+            if (follow_line(speed_go, 'l', 0, mission.time, sens.fork,follow_dist)) {
+                
+                boxdist = fabs(odo.y_pos) + 0.255 + laserpar[4];
+                printf("Distance to box: %f\n", boxdist);
+                printf("Distance to box: %f\n", laserpar[4]);
+                mission.state = ms_wait;
+            }
+            break;
+     case ms_wait:
+         if(wait(2, mission.time)){
+           mission.state = ms_goto_box;}
+           break;       
+     case ms_goto_box:
+         if (goto_box(speed_go,follow_dist)){
+	    mission.state = ms_end;}
 	 break;
 
      case ms_turn:
@@ -417,7 +432,7 @@ i_2++;
      break;
    }  
 /*  end of mission  */
-  printf("%d,%f;%f;%d\n",mission.time,mot.speedcmd,mot.motorspeed_l,sens.w_cross);
+  //printf("%d,%f;%f;%d;%d;%f;%f;%f\n",mission.time,mot.speedcmd,mot.motorspeed_l,mission.state,mission.sub_state,odo.center_deg,mot.start_deg,mot.angle);
   mot.left_pos=odo.left_pos;
   mot.right_pos=odo.right_pos;
   update_motcon(&mot,&odo,&sens);
@@ -623,6 +638,16 @@ int turn(double angle, double speed,int time){
      return mot.finished;
 }
 
+int wait(double wait_time, int time) {
+    if (time < wait_time * 100) {
+        return 0;
+    }
+    else {
+        return 1;
+    }
+}
+
+
 int follow_line(double speed, char dir, int flag_c, int time, int condition,int followdist) {
 	int i = 0;
 	int min = 0;
@@ -680,19 +705,26 @@ int goto_box(double speed,double followdist) {
 	switch (mission.sub_state)
 	{
 	case 0:
-		if (follow_line(speed, 'l', 0, mission.sub_time, 0, followdist)) {
+		if (turn(30, speed, mission.sub_time)) {
 			mission.sub_state = 1;
 			mission.sub_time = (-1);
 		}
 		break;
-	case 1:
-		if (fwd(robot_length, speed, mission.sub_time, 0)) {
+        case 1:
+		if (follow_line(speed, 'c', 0, mission.sub_time, 0, followdist)) {
 			mission.sub_state = 2;
 			mission.sub_time = (-1);
+                        mot.flag_collision=0;
 		}
 		break;
 	case 2:
-		if (turn(90, speed, mission.sub_time)) {
+		if (fwd(0.5, 20, mission.sub_time, 0)) {
+			mission.sub_state = 3;
+			mission.sub_time = (-1);
+		}
+		break;
+	case 3:
+		if (turn(90, 20, mission.sub_time)) {
 			return 1;
 		}
 		break;
@@ -721,8 +753,9 @@ void speed_control(int aim, motiontype *p, odotype *q, sensetype *s)
 			p->speed--;}
 	else if (p->speed < aim) {
 			p->speed++;}
-	if (s->ir_min < 0.20 && p->flag_collision)
+	if (s->ir_min < 0.20 && p->flag_collision){
 		p->speed = 0;
+                p->cmd=mot_stop;}
 	p->speedcmd = p->speed / 127.0;
 }
 
@@ -735,7 +768,7 @@ void speed_control_t(int aim, motiontype *p, odotype *q, sensetype *s)
 	else if (p->speed_t < aim) {
 		p->speed_t++;
 	}
-        p->speedcmd = p->speed_t / 127.0;
+        p->speedcmd_t = p->speed_t / 127.0;
 }
 
 void update_sensors(sensetype *s, odotype *q)
@@ -796,7 +829,7 @@ void update_sensors(sensetype *s, odotype *q)
 	{
 		s->fork_test++;
 		if (s->fork_test > 2) {
-			printf("FORK found! \n");
+			//printf("FORK found! \n");
 			s->fork = 1;
 		}
 
