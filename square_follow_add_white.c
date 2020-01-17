@@ -441,6 +441,216 @@ i_2++;
   rhdSync();
   rhdDisconnect();
   exit(0);
+    lmssrv.port = 24919;
+    strcpy(lmssrv.host, "127.0.0.1");
+    strcpy(lmssrv.name, "laserserver");
+    lmssrv.status = 1;
+    camsrv.port = 24920;
+    strcpy(camsrv.host, "127.0.0.1");
+    camsrv.config = 1;
+    strcpy(camsrv.name, "cameraserver");
+    camsrv.status = 1;
+
+    if (camsrv.config) {
+        int errno = 0;
+        camsrv.sockfd = socket(AF_INET, SOCK_STREAM, 0);
+        if (camsrv.sockfd < 0)
+        {
+            perror(strerror(errno));
+            fprintf(stderr, " Can not make  socket\n");
+            exit(errno);
+        }
+
+        serverconnect(&camsrv);
+
+        xmldata = xml_in_init(4096, 32);
+        printf(" camera server xml initialized \n");
+
+    }
+
+
+
+
+    // **************************************************
+    //  LMS server code initialization
+    //
+
+    /* Create endpoint */
+    lmssrv.config = 1;
+    if (lmssrv.config) {
+        char buf[256];
+        int errno = 0, len;
+        lmssrv.sockfd = socket(AF_INET, SOCK_STREAM, 0);
+        if (lmssrv.sockfd < 0)
+        {
+            perror(strerror(errno));
+            fprintf(stderr, " Can not make  socket\n");
+            exit(errno);
+        }
+
+        serverconnect(&lmssrv);
+        if (lmssrv.connected) {
+            xmllaser = xml_in_init(4096, 32);
+            printf(" laserserver xml initialized \n");
+            len=sprintf(buf,"scanpush cmd='zoneobst'\n");
+            send(lmssrv.sockfd, buf, len, 0);
+        }
+
+    }
+
+
+    /* Read sensors and zero our position.
+     */
+    rhdSync();
+
+    odo.w = WHEEL_SEPARATION;
+    odo.cl = DELTA_M;
+    odo.cr = odo.cl * E_d;
+    odo.left_enc = lenc->data[0];
+    odo.right_enc = renc->data[0];
+    reset_odo(&odo);
+    printf("position: %f, %f\n", odo.left_pos, odo.right_pos);
+    mot.w = odo.w;
+    mot.k_follow = -0.15;
+    mot.speed_aim = 0;
+    mot.speed_t_aim = 0;
+    mot.speed = 0;
+    mot.speed_t = 0;
+    running = 1;
+    mission.state = ms_init;
+    mission.oldstate = -1;
+    sens.black_line_follow = 1;
+    while (running) {
+        if (lmssrv.config && lmssrv.status && lmssrv.connected) {
+            while ((xml_in_fd(xmllaser, lmssrv.sockfd) > 0))
+                xml_proca(xmllaser);
+        }
+
+        if (camsrv.config && camsrv.status && camsrv.connected) {
+            while ((xml_in_fd(xmldata, camsrv.sockfd) > 0))
+                xml_proc(xmldata);
+        }
+
+
+        rhdSync();
+        odo.left_enc = lenc->data[0];
+        odo.right_enc = renc->data[0];
+        update_sensors(&sens, &odo);
+        update_odo(&odo);
+
+        //write in array//
+        if (i_2 < ARRAY_LENTGH) {
+            record[0][i_2] = mission.time;
+            record[1][i_2] = mot.motorspeed_l;
+            record[2][i_2] = mot.motorspeed_r;
+            record_odo[0][i_2] = mission.time;
+            record_odo[1][i_2] = odo.x_pos;
+            record_odo[2][i_2] = odo.y_pos;
+            record_odo[3][i_2] = odo.center_deg;
+            record_line[0][i_2] = mission.time;
+            record_line[1][i_2] = linesensor->data[0];
+            record_line[2][i_2] = linesensor->data[1];
+            record_line[3][i_2] = linesensor->data[2];
+            record_line[4][i_2] = linesensor->data[3];
+            record_line[5][i_2] = linesensor->data[4];
+            record_line[6][i_2] = linesensor->data[5];
+            record_line[7][i_2] = linesensor->data[6];
+            record_line[8][i_2] = linesensor->data[7];
+            i_2++;
+        }
+        //end write
+
+        /****************************************
+        / mission statemachine
+        */
+        sm_update(&mission);
+
+        switch (mission.state) {
+        case ms_init:
+            n = 4; dist = 2;angle = 90.0 / 180 * M_PI;
+            speed_go = 40;
+            mission.state = ms_measBox;
+
+            break;
+
+        case ms_fwd:
+            if (fwd(2, speed_go, mission.time, sens.cross))  mission.state = ms_follow_line;
+            break;
+
+        case ms_follow_line:
+            if (follow_line(speed_go, 'r', 0, mission.time, sens.cross))
+                mission.state = ms_end;
+            break;
+
+        case ms_follow_white_line:
+            if (follow_line(speed_go, 'c', 1, mission.time, sens.w_cross))
+                mission.state = ms_end;
+            break;
+
+        case ms_turn:
+            if (turn(angle, speed_go, mission.time)) {
+                n = n - 1;
+                if (n == 0)
+                    mission.state = ms_end;
+                else
+                    mission.state = ms_fwd;
+            }
+            break;
+        case ms_end:
+            mot.cmd = mot_stop;
+            running = 0;
+            break;
+        case ms_measBox:
+            if (follow_line(speed_go, 'l', 0, mission.time, sens.fork)) {
+                wait(2, mission.time);
+                boxdist = fabs(odo.y_pos) + 0.255 + laserpar[4];
+                printf("Distance to box: %f\n", boxdist);
+                printf("Distance to box: %f\n", laserpar[4]);
+                mot.cmd = mot_stop;
+                mission.state = ms_end;
+            }
+            break;
+        }
+        /*  end of mission  */
+        printf("%d,%f;%f;%d\n", mission.time, mot.speedcmd, mot.motorspeed_l, sens.w_cross);
+        mot.left_pos = odo.left_pos;
+        mot.right_pos = odo.right_pos;
+        update_motcon(&mot, &odo, &sens);
+        speedl->data[0] = 100 * mot.motorspeed_l;
+        speedl->updated = 1;
+        speedr->data[0] = 100 * mot.motorspeed_r;
+        speedr->updated = 1;
+        //if (time  % 100 ==0)
+           //  printf(" laser %f \n",laserpar[3]);
+       // time++;
+      /* stop if keyboard is activated
+      *
+      */
+        ioctl(0, FIONREAD, &arg);
+        if (arg != 0)  running = 0;
+
+    }/* end of main control loop */
+
+
+    //write array in file
+    int i_3 = 0;
+    while (i_3 < ARRAY_LENTGH) {
+        fprintf(fp, "%f;%f;%f\n", record[0][i_3], record[1][i_3], record[2][i_3]);
+        fprintf(fp2, "%f;%f;%f;%f\n", record_odo[0][i_3], record_odo[1][i_3], record_odo[2][i_3], record_odo[3][i_3]);
+        fprintf(fp3, "%f;%f;%f;%f;%f;%f;%f;%f;%f\n", record_line[0][i_3], record_line[1][i_3], record_line[2][i_3], record_line[3][i_3], record_line[4][i_3], record_line[5][i_3], record_line[6][i_3], record_line[7][i_3], record_line[8][i_3]);
+        i_3++;
+    }
+    fclose(fp);
+    fclose(fp2);
+    fclose(fp3);
+    //end
+    speedl->data[0] = 0;
+    speedl->updated = 1;
+    speedr->data[0] = 0;
+    speedr->updated = 1;
+    rhdSync();
+    rhdDisconnect();
+    exit(0);
 }
 
 
