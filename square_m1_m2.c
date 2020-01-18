@@ -62,7 +62,7 @@ componentservertype lmssrv,camsrv;
 #define WHEEL_SEPARATION 0.26	/* m */
 #define E_d 1
 #define DELTA_M (M_PI * WHEEL_DIAMETER / 2000)
-#define ROBOTPORT	8000 //24902
+#define ROBOTPORT	24902 //24902
 #define LINE_SENS_LENGTH 8
 #define IR_SENS_LENGTH 6
 
@@ -97,7 +97,7 @@ typedef struct {
         int w_cross;//true or false
 	int fork; //true or false
 	int fork_test;
-	
+    int ground;
 	double ir_min;
 	double irsensor[IR_SENS_LENGTH];
 	double ir_dist[IR_SENS_LENGTH];
@@ -111,8 +111,8 @@ typedef struct {
 } sensetype;
 
 void update_sensors(sensetype *s, odotype *q);
-const double linesensor_interp[2][8] = { {0.0861,0.0739,0.0733,0.0774,0.0786,0.0803,0.0776,0.0862},
-				 {-5.5469,-4.9269,-3.4521,-2.9450, -3.9218,-2.6641,-1.5437,-4.1571} };
+const double linesensor_interp[2][8] = { {0.0217,0.0151,0.0140,0.0133,0.0131,0.0144,0.0157,0.0234},
+				 {-1.1504,-0.8265,-0.7911,-0.7527, -0.7453,-0.8096,-0.9092,-1.3771} };
 
 /********************************************
 * Motion control
@@ -183,15 +183,25 @@ smtype mission;
 motiontype mot;
 sensetype sens;
 
-enum {ms_init,ms_fwd,ms_follow_line,ms_follow_white_line,ms_turn,ms_end,ms_goto_box,ms_measBox,ms_wait};
+enum {
+    ms_init,
+    ms_fwd,
+    ms_follow_line,
+    ms_follow_white_line,
+    ms_turn,
+    ms_end,ms_goto_box,
+    ms_measBox,
+    ms_wait
+};
 
-const double BLACK_THRESHOLD = 0.12;
+const double BLACK_THRESHOLD = 0.15;
 const double WHITE_THRESHOLD = 0.75;
 const double robot_length = 0.25;//0.28;
 
 
 int cross_counter;
 int w_cross_counter;
+//int m_cross_counter;
 
 //logging test//
 #define ARRAY_LENTGH 3000
@@ -207,6 +217,7 @@ int main()
   double boxdist = 0;
   cross_counter = 0;
   w_cross_counter=0;
+  //m_cross_counter=0;
   sens.cross = 0;
   sens.w_cross = 0;
   //open file//
@@ -301,7 +312,7 @@ int main()
    if (lmssrv.connected){
      xmllaser=xml_in_init(4096,32);
      printf(" laserserver xml initialized \n");
-     len = sprintf(buf, "scanpush cmd = 'zoneobst'\n");
+     len=sprintf(buf,"scanpush cmd='zoneobst'\n");
      send(lmssrv.sockfd,buf,len,0);
    }
 
@@ -380,8 +391,8 @@ i_2++;
      case ms_init:
        n=4; dist=1;angle=90.0;
        mission.state= ms_measBox;
-       speed_go = 40;
-	   follow_dist = 5;
+       speed_go = 20;
+       follow_dist = 5;
      break;
   
      case ms_fwd:
@@ -401,10 +412,10 @@ i_2++;
      case ms_measBox:
             if (follow_line(speed_go, 'l', 0, mission.time, sens.fork,follow_dist)) {
                 
-                boxdist = fabs(odo.y_pos) + 0.255 + laserpar[4];
+                boxdist = fabs(odo.x_pos) + 0.255 + laserpar[4];
                 printf("Distance to box: %f\n", boxdist);
                 printf("Distance to box: %f\n", laserpar[4]);
-                mission.state = ms_wait;
+                mission.state = ms_end;
             }
             break;
      case ms_wait:
@@ -432,7 +443,8 @@ i_2++;
      break;
    }  
 /*  end of mission  */
-  //printf("%d,%f;%f;%d;%d;%f;%f;%f\n",mission.time,mot.speedcmd,mot.motorspeed_l,mission.state,mission.sub_state,odo.center_deg,mot.start_deg,mot.angle);
+  printf("%f\n",odo.x_pos);
+  //printf("%d,%f;%f;%d;%d;%f;%f;%d\n",mission.time,mot.speedcmd,mot.motorspeed_l,mission.state,mission.sub_state,mot.dist,mot.angle,sens.cross);
   mot.left_pos=odo.left_pos;
   mot.right_pos=odo.right_pos;
   update_motcon(&mot,&odo,&sens);
@@ -440,9 +452,10 @@ i_2++;
   speedl->updated=1;
   speedr->data[0]=100*mot.motorspeed_r;
   speedr->updated=1;
-  //if (time  % 100 ==0)
-     //  printf(" laser %f \n",laserpar[3]);
- // time++;
+  if (time  % 100 ==0)
+      //printf("%f;%f;%f;%f;%f;%f;%f;%f;%f;%f\n",laserpar[0],laserpar[1],laserpar[2],laserpar[3],laserpar[4],laserpar[5],laserpar[6],laserpar[7],laserpar[8],laserpar[9]);
+ time++;
+      //printf("%d\n",sens.fork_test);
 /* stop if keyboard is activated
 *
 */
@@ -662,6 +675,7 @@ int follow_line(double speed, char dir, int flag_c, int time, int condition,int 
 		if (condition)
 		{
 			mot.cmd = mot_stop;
+                        //m_cross_counter++;
 			return mot.finished;
 		}
 		if (sens.fork) {
@@ -705,7 +719,7 @@ int goto_box(double speed,double followdist) {
 	switch (mission.sub_state)
 	{
 	case 0:
-		if (turn(30, speed, mission.sub_time)) {
+		if (turn(25, speed, mission.sub_time)) {
 			mission.sub_state = 1;
 			mission.sub_time = (-1);
 		}
@@ -724,12 +738,76 @@ int goto_box(double speed,double followdist) {
 		}
 		break;
 	case 3:
-		if (turn(90, 20, mission.sub_time)) {
+		if (fwd(1.05, -20, mission.sub_time, 0)) {
+			mission.sub_state = 4;
+			mission.sub_time = (-1);
+		}
+		break;
+        case 4:
+		if (turn(180, speed, mission.sub_time)) {
+			mission.sub_state = 5;
+			mission.sub_time = (-1);
+		}
+		break;
+        case 5:
+		if (follow_line(speed, 'c', 0, mission.sub_time, sens.cross, followdist)) {
+			mission.sub_state = 6;
+			mission.sub_time = (-1);
+                        mot.flag_collision=0;
+		}
+		break;
+        case 6:
+		if (turn(45, speed, mission.sub_time)) {
+			mission.sub_state = 7;
+			mission.sub_time = (-1);
+		}
+		break;
+        case 7:
+		if (follow_line(speed, 'c', 0, mission.sub_time, sens.cross, followdist)) {
+			mission.sub_state = 8;
+			mission.sub_time = (-1);
+                        mot.flag_collision=0;
+		}
+		break;
+
+        case 8:
+		if (fwd(0.5, 20, mission.sub_time, 0)) {
 			return 1;
 		}
 		break;
-	}
+        }
 	return 0;
+}
+
+int follow_white_line(double speed, double followdist) {
+    switch (mission.sub_state)
+    {   
+    case 0:
+        if (fwd(0.2, 20, mission.sub_time, 0)) {
+            mission.sub_state = 1;
+            mission.sub_time = (-1);
+        }
+        break;
+    case 1:
+        if (turn(85, speed, mission.sub_time){
+            mission.sub_state = 2;
+            mission.sub_time = (-1);
+        }
+        break;
+    case 2:
+        if (follow_line(speed, 'c', 1, mission.sub_time, sens.ground, followdist) {
+            mission.sub_state = 3;
+            mission.sub_time = (-1);
+        }
+        break;
+    case 3:
+        if (fwd(0.2, 20, mission.sub_time, 0)) {
+            return 1;
+        }
+        break;
+
+    }
+    return 0;
 }
 
 
@@ -750,9 +828,9 @@ void speed_control(int aim, motiontype *p, odotype *q, sensetype *s)
 {
 	
 	if (p->speed > aim) {
-			p->speed--;}
+			p->speed-=1;}
 	else if (p->speed < aim) {
-			p->speed++;}
+			p->speed+=1;}
 	if (s->ir_min < 0.20 && p->flag_collision){
 		p->speed = 0;
                 p->cmd=mot_stop;}
@@ -763,10 +841,10 @@ void speed_control_t(int aim, motiontype *p, odotype *q, sensetype *s)
 {
 
 	if (p->speed_t > aim) {
-		p->speed_t--;
+		p->speed_t-=1;
 	}
 	else if (p->speed_t < aim) {
-		p->speed_t++;
+		p->speed_t+=1;
 	}
         p->speedcmd_t = p->speed_t / 127.0;
 }
@@ -799,13 +877,18 @@ void update_sensors(sensetype *s, odotype *q)
 		}
 		if (s->linesensor[i] < BLACK_THRESHOLD) {
 			line_counter++;
+            s->ground = 0;
 			if (fork_counter == 0 || fork_counter == 2)
 				fork_counter++;
 		}
+        else if ((s->linesensor[i] > BLACK_THRESHOLD) && (s->linesensor[i] < WHITE_THRESHOLD)) {
+            s->ground = 1;
+        }
 		else {
 			if (fork_counter == 1)
 				fork_counter++;
 			if (s->linesensor[i] > WHITE_THRESHOLD) {
+                s->ground = 0;
 				white_line_counter++;
 			}
 		}
